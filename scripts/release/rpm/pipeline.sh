@@ -15,6 +15,8 @@ set -exv
 
 CLI_VERSION=`cat src/azure-cli/azure/cli/__main__.py | grep __version__ | sed s/' '//g | sed s/'__version__='// |  sed s/\"//g`
 
+ls -l -R
+
 # Create a container image that includes the source code and a built RPM using this file.
 docker build \
     --target build-env \

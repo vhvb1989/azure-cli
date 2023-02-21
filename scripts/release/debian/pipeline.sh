@@ -10,6 +10,8 @@ set -exv
 
 CLI_VERSION=`cat src/azure-cli/azure/cli/__main__.py | grep __version__ | sed s/' '//g | sed s/'__version__='// |  sed s/\"//g`
 
+ls -l -R
+
 docker run --rm \
            -v "$BUILD_SOURCESDIRECTORY":/mnt/repo \
            -v "$BUILD_STAGINGDIRECTORY":/mnt/output \

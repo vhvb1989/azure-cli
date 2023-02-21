@@ -27,5 +27,6 @@ FROM ${image} AS execution-env
 RUN yum update -y
 
 COPY --from=build-env /azure-cli-dev.rpm ./
-RUN yum install -y ./azure-cli-dev.rpm && \
+RUN rpm -qlv azure-cli-dev.rpm && \
+    yum install -y ./azure-cli-dev.rpm && \
     az --version

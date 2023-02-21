@@ -14,6 +14,11 @@ WORKDIR /azure-cli
 
 COPY . .
 
+RUN python3.9 -m venv testenv && \
+    source testenv/bin/activate && \
+    python3.9 -m pip install --upgrade pip && \
+    source scripts/install_full.sh
+
 # RHEL 8's 'python3' is Python 3.6. RHEL 9's 'python3' is Python 3.9.
 # We have to explicitly specify 'python39' to install Python 3.9.
 RUN ls -l -R && \

@@ -22,6 +22,6 @@ pip install -r ./src/azure-cli/requirements.$(python ./scripts/get-python-versio
 
 # For debugging
 pip list -v
-ls -l -R $RPM_BUILD_ROOT
+ls -l -R testenv
 
 popd > /dev/null

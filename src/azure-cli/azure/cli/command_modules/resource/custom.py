@@ -549,8 +549,7 @@ def _deploy_arm_template_at_subscription_scope(cmd,
                                                                       template_spec=template_spec, query_string=query_string,
                                                                       validation_level=validation_level)
 
-    mgmt_client = _get_deployment_management_client(cmd.cli_ctx, plug_pipeline=(template_uri is None and template_spec is None and
-                                                                                not (template_file and is_bicep_file(template_file))))
+    mgmt_client = _get_deployment_management_client(cmd.cli_ctx, plug_pipeline=(template_uri is None and template_spec is None))
 
     from azure.core.exceptions import HttpResponseError
     Deployment = cmd.get_models('Deployment')

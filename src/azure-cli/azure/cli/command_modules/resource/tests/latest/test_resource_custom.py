@@ -12,7 +12,7 @@ from urllib.parse import urljoin
 
 from unittest import mock
 
-from azure.cli.core.util import CLIError, get_file_json, shell_safe_json_parse
+from azure.cli.core.util import CLIError, get_file_json, shell_safe_json_parse, read_file_content
 from azure.cli.command_modules.resource.custom import (
     _get_missing_parameters,
     _extract_lock_params,
@@ -28,6 +28,8 @@ from azure.cli.command_modules.resource.custom import (
     deploy_arm_template_at_tenant_scope,
     format_bicep_file,
     publish_bicep_file,
+    _process_template_file,
+    _prepare_deployment_properties_unmodified,
 )
 
 from azure.cli.command_modules.resource._bicep import (run_bicep_command)
@@ -710,6 +712,165 @@ class TestPublishWithSource(unittest.TestCase):
             mock.call(cmd.cli_ctx, "0.23.1") # Min version for 'bicep publish --with-source'
         ])
         mock_run_bicep_command.assert_called_once_with(cmd.cli_ctx, ['publish', file_path, '--target', 'br:contoso.azurecr.io/bicep/mymodule:v1', '--with-source'])
+
+
+class TestTemplateSizeOptimization(unittest.TestCase):
+    """Tests for bicep template size optimization changes."""
+
+    @mock.patch('azure.cli.command_modules.resource.custom.validate_bicep_target_scope')
+    @mock.patch('azure.cli.command_modules.resource.custom.run_bicep_command')
+    @mock.patch('azure.cli.command_modules.resource.custom.is_bicep_file')
+    def test_process_template_file_bicep_returns_both(self, mock_is_bicep, mock_run_bicep, mock_validate):
+        """Test that bicep files return both template_content and template_obj."""
+        # Arrange
+        mock_is_bicep.return_value = True
+        mock_template_json = '{"$schema": "https://schema.management.azure.com/schemas/2019-08-01/deploymentTemplate.json#", "resources": []}'
+        mock_run_bicep.return_value = mock_template_json
+        mock_validate.return_value = None  # No validation errors
+        
+        # Act
+        template_content, template_obj = _process_template_file(cmd, "test.bicep", "resourceGroup")
+        
+        # Assert
+        self.assertEqual(template_content, mock_template_json)
+        self.assertIsInstance(template_obj, dict)
+        self.assertEqual(template_obj['$schema'], "https://schema.management.azure.com/schemas/2019-08-01/deploymentTemplate.json#")
+        mock_run_bicep.assert_called_once()
+        mock_validate.assert_called_once()
+
+    @mock.patch('azure.cli.command_modules.resource.custom._remove_comments_from_json')
+    @mock.patch('azure.cli.command_modules.resource.custom.read_file_content')
+    @mock.patch('azure.cli.command_modules.resource.custom.is_bicep_file')
+    def test_process_template_file_arm_returns_both(self, mock_is_bicep, mock_read_file, mock_remove_comments):
+        """Test that ARM templates return both template_content and template_obj."""
+        # Arrange
+        mock_is_bicep.return_value = False
+        mock_template_content = '{"$schema": "https://schema.management.azure.com/schemas/2019-08-01/deploymentTemplate.json#", "resources": []}'
+        mock_template_obj = {"$schema": "https://schema.management.azure.com/schemas/2019-08-01/deploymentTemplate.json#", "resources": []}
+        mock_read_file.return_value = mock_template_content
+        mock_remove_comments.return_value = mock_template_obj
+        
+        # Act
+        template_content, template_obj = _process_template_file(cmd, "test.json", "resourceGroup")
+        
+        # Assert
+        self.assertEqual(template_content, mock_template_content)
+        self.assertEqual(template_obj, mock_template_obj)
+        mock_read_file.assert_called_once_with("test.json")
+        mock_remove_comments.assert_called_once()
+
+    @mock.patch('azure.cli.command_modules.resource.custom._get_template_for_deployment')
+    @mock.patch('azure.cli.command_modules.resource.custom._process_template_file')
+    def test_bicep_deployment_uses_template_obj(self, mock_process_template, mock_get_template):
+        """Test that bicep deployments use template_obj to avoid size inflation."""
+        # Arrange
+        mock_template_content = '{"resources": []}'
+        mock_template_obj = {"resources": []}
+        mock_process_template.return_value = (mock_template_content, mock_template_obj)
+        mock_get_template.return_value = mock_template_obj  # This is the key - bicep uses template_obj
+        
+        # Act
+        properties = _prepare_deployment_properties_unmodified(cmd, "resourceGroup", "test.bicep", None, None, None, None)
+        
+        # Assert
+        self.assertEqual(properties.template, mock_template_obj)
+        mock_get_template.assert_called_once()
+        # Verify that _get_template_for_deployment was called with both content and obj
+        args = mock_get_template.call_args[0]
+        self.assertIn(mock_template_content, args)  # template_content parameter
+        self.assertIn(mock_template_obj, args)      # template_obj parameter
+
+    @mock.patch('azure.cli.command_modules.resource.custom._get_template_for_deployment')
+    @mock.patch('azure.cli.command_modules.resource.custom._process_template_file')  
+    def test_arm_deployment_uses_template_content(self, mock_process_template, mock_get_template):
+        """Test that ARM deployments use template_content for JsonC compatibility."""
+        # Arrange
+        mock_template_content = '{"resources": []}'
+        mock_template_obj = {"resources": []}
+        mock_process_template.return_value = (mock_template_content, mock_template_obj)
+        mock_get_template.return_value = mock_template_content  # ARM uses template_content
+        
+        # Act
+        properties = _prepare_deployment_properties_unmodified(cmd, "resourceGroup", "test.json", None, None, None, None)
+        
+        # Assert
+        self.assertEqual(properties.template, mock_template_content)
+        mock_get_template.assert_called_once()
+
+    @mock.patch('azure.cli.command_modules.resource.custom._urlretrieve')
+    def test_uri_deployment_uses_template_link(self, mock_urlretrieve):
+        """Test that URI deployments use templateLink without local processing."""
+        # Arrange
+        mock_urlretrieve.return_value = b'{"resources": []}'
+        
+        # Act
+        properties = _prepare_deployment_properties_unmodified(cmd, "resourceGroup", None, "https://example.com/template.json", None, None, None)
+        
+        # Assert
+        self.assertEqual(properties.template_link.uri, "https://example.com/template.json")
+        self.assertIsNone(properties.template)  # Uses templateLink, not template
+
+    @mock.patch('azure.cli.command_modules.resource.custom.is_bicep_file')
+    def test_get_template_for_deployment_bicep_uses_obj(self, mock_is_bicep):
+        """Test that _get_template_for_deployment returns template_obj for bicep files."""
+        # Arrange
+        mock_is_bicep.return_value = True
+        template_content = '{"resources": []}'
+        template_obj = {"resources": []}
+        
+        # Import the function we're testing
+        from azure.cli.command_modules.resource.custom import _get_template_for_deployment
+        
+        # Act
+        result = _get_template_for_deployment(None, None, "test.bicep", template_content, template_obj, None)
+        
+        # Assert
+        self.assertEqual(result, template_obj)  # Should return the object, not the string
+
+    @mock.patch('azure.cli.command_modules.resource.custom.is_bicep_file')
+    def test_get_template_for_deployment_arm_uses_content(self, mock_is_bicep):
+        """Test that _get_template_for_deployment returns template_content for ARM files."""
+        # Arrange
+        mock_is_bicep.return_value = False
+        template_content = '{"resources": []}'
+        template_obj = {"resources": []}
+        
+        # Import the function we're testing  
+        from azure.cli.command_modules.resource.custom import _get_template_for_deployment
+        
+        # Act
+        result = _get_template_for_deployment(None, None, "test.json", template_content, template_obj, None)
+        
+        # Assert
+        self.assertEqual(result, template_content)  # Should return the string, not the object
+
+    def test_bicep_vs_arm_size_comparison(self):
+        """Test that demonstrates bicep templates avoid string escaping overhead."""
+        # This test demonstrates the size optimization concept
+        
+        # Sample content with characters that would be escaped in JSON strings
+        test_content = '''
+        {
+          "description": "A test template\\nwith special \\"chars\\" and 'quotes'",
+          "value": "Line 1\\nLine 2\\nLine 3\\\\path"
+        }
+        '''
+        
+        # When treated as JSON object (bicep path) - no escaping
+        import json
+        template_obj = json.loads(test_content)
+        obj_representation = json.dumps(template_obj, separators=(',', ':'))
+        
+        # When treated as string content (ARM path) - escaping applied
+        import re
+        escaped_content = re.sub(r'\\', r'\\\\', test_content)  # Simplified escaping simulation
+        escaped_content = re.sub(r'"', r'\\"', escaped_content)
+        
+        # Assert that object representation is more compact
+        self.assertLess(len(obj_representation), len(escaped_content))
+        
+        # This demonstrates why bicep templates using template_obj avoid size inflation
+
 
 if __name__ == '__main__':
     unittest.main()

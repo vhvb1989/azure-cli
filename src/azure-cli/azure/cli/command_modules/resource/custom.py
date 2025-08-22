@@ -387,13 +387,24 @@ def _deploy_arm_template_core_unmodified(cmd, resource_group_name, template_file
     if template_uri:
         template_link = TemplateLink(uri=template_uri)
         template_obj = _remove_comments_from_json(_urlretrieve(template_uri).decode('utf-8'), file_path=template_uri)
+        template_for_deployment = None  # Use template_link for URI-based deployments
     else:
-        template_content = (
-            run_bicep_command(cmd.cli_ctx, ["build", "--stdout", template_file])
-            if is_bicep_file(template_file)
-            else read_file_content(template_file)
-        )
-        template_obj = _remove_comments_from_json(template_content, file_path=template_file)
+        if is_bicep_file(template_file):
+            # Get compiled JSON from bicep
+            template_content = run_bicep_command(cmd.cli_ctx, ["build", "--stdout", template_file])
+            # For bicep files, parse JSON directly to avoid Azure SDK size inflation.
+            # Bicep compilation outputs clean JSON without comments, so it's safe to
+            # parse directly. This prevents the 4MB template size limit issue caused
+            # by Azure SDK string escaping when using template content as string.
+            template_obj = json.loads(template_content)
+            template_for_deployment = template_obj
+        else:
+            # For ARM template files, read content and process comments
+            template_content = read_file_content(template_file)
+            template_obj = _remove_comments_from_json(template_content, file_path=template_file)
+            # Keep using string content for ARM files as JSON with comments
+            # cannot be parsed directly and needs the current flow
+            template_for_deployment = template_content
 
     if rollback_on_error == '':
         on_error_deployment = OnErrorDeployment(type='LastSuccessful')
@@ -406,7 +417,7 @@ def _deploy_arm_template_core_unmodified(cmd, resource_group_name, template_file
 
     parameters = json.loads(json.dumps(parameters))
 
-    properties = DeploymentProperties(template=template_content, template_link=template_link,
+    properties = DeploymentProperties(template=template_for_deployment, template_link=template_link,
                                       parameters=parameters, mode=mode, on_error_deployment=on_error_deployment)
 
     smc = get_mgmt_service_client(cmd.cli_ctx, ResourceType.MGMT_RESOURCE_DEPLOYMENTS,
@@ -414,7 +425,9 @@ def _deploy_arm_template_core_unmodified(cmd, resource_group_name, template_file
 
     deployment_client = smc.deployments  # This solves the multi-api for you
 
-    if not template_uri:
+    # Only add JsonCTemplatePolicy for ARM template files (not bicep files)
+    # since bicep files now use JSON objects directly
+    if not template_uri and template_file and not is_bicep_file(template_file):
         # Plug this as default HTTP pipeline
         # pylint: disable=protected-access
         from azure.core.pipeline import Pipeline
@@ -479,6 +492,7 @@ class JsonCTemplatePolicy(SansIOHTTPPolicy):
             # Because the service cannot deserialize the template element: "template": "{\r\n  \"$schema\": \"...\",\r\n  \"contentVersion\": \"...\",\r\n  \"parameters\": {...}}"
             partial_request = json.dumps(modified_data)
             json_data = partial_request[:-2] + ", template:" + template + r"}}"
+
             http_request.data = json_data.encode('utf-8')
 
             # This caused a very difficult-to-debug issue, because AzCLI's debug logs are written before this transformation.
@@ -551,7 +565,8 @@ def _deploy_arm_template_at_subscription_scope(cmd,
                                                                       template_spec=template_spec, query_string=query_string,
                                                                       validation_level=validation_level)
 
-    mgmt_client = _get_deployment_management_client(cmd.cli_ctx, plug_pipeline=(template_uri is None and template_spec is None))
+    mgmt_client = _get_deployment_management_client(cmd.cli_ctx, plug_pipeline=(template_uri is None and template_spec is None and
+                                                                                not (template_file and is_bicep_file(template_file))))
 
     from azure.core.exceptions import HttpResponseError
     Deployment = cmd.get_models('Deployment')
@@ -1167,17 +1182,20 @@ def _prepare_deployment_properties_unmodified(cmd, deployment_scope, template_fi
         template_schema = template_obj.get('$schema', '')
         validate_bicep_target_scope(template_schema, deployment_scope)
     else:
-        template_content = (
-            run_bicep_command(cmd.cli_ctx, ["build", "--stdout", template_file])
-            if is_bicep_file(template_file)
-            else read_file_content(template_file)
-        )
-
-        template_obj = _remove_comments_from_json(template_content, file_path=template_file)
-
         if is_bicep_file(template_file):
+            # Get compiled JSON from bicep
+            template_content = run_bicep_command(cmd.cli_ctx, ["build", "--stdout", template_file])
+            # For bicep files, parse JSON directly to avoid Azure SDK size inflation.
+            # Bicep compilation outputs clean JSON without comments, so it's safe to
+            # parse directly. This prevents the 4MB template size limit issue caused
+            # by Azure SDK string escaping when using template content as string.
+            template_obj = json.loads(template_content)
             template_schema = template_obj.get('$schema', '')
             validate_bicep_target_scope(template_schema, deployment_scope)
+        else:
+            # For ARM template files, read content and process comments
+            template_content = read_file_content(template_file)
+            template_obj = _remove_comments_from_json(template_content, file_path=template_file)
 
     if rollback_on_error == '':
         on_error_deployment = OnErrorDeployment(type='LastSuccessful')
@@ -1193,7 +1211,21 @@ def _prepare_deployment_properties_unmodified(cmd, deployment_scope, template_fi
         parameters = _get_missing_parameters(parameters, template_obj, _prompt_for_parameters, no_prompt)
         parameters = json.loads(json.dumps(parameters))
 
-    properties = DeploymentProperties(template=template_content, template_link=template_link,
+    # Determine what to use for template deployment based on the source
+    if template_uri or template_spec:
+        # For URI and template spec deployments, use None (template_link will be used)
+        template_for_deployment = None
+    elif _is_bicepparam_file_provided(parameters):
+        # For bicepparam files, use the content
+        template_for_deployment = template_content
+    elif template_file and is_bicep_file(template_file):
+        # For bicep files, use JSON object to avoid size inflation
+        template_for_deployment = template_obj
+    else:
+        # For ARM template files, use string content
+        template_for_deployment = template_content
+
+    properties = DeploymentProperties(template=template_for_deployment, template_link=template_link,
                                       parameters=parameters, mode=mode, on_error_deployment=on_error_deployment,
                                       validation_level=validation_level)
     return properties

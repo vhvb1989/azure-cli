@@ -389,6 +389,7 @@ def _deploy_arm_template_core_unmodified(cmd, resource_group_name, template_file
         template_obj = _remove_comments_from_json(_urlretrieve(template_uri).decode('utf-8'), file_path=template_uri)
         template_for_deployment = None  # Use template_link for URI-based deployments
     else:
+        # This function is resource-group-specific, so we hardcode 'resourceGroup' deployment scope
         template_content, template_obj = _process_template_file(cmd, template_file, 'resourceGroup')
         template_for_deployment = _get_template_for_deployment(template_uri, None, template_file, template_content, template_obj, None)
 

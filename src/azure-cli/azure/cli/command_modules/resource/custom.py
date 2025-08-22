@@ -425,9 +425,7 @@ def _deploy_arm_template_core_unmodified(cmd, resource_group_name, template_file
 
     deployment_client = smc.deployments  # This solves the multi-api for you
 
-    # Only add JsonCTemplatePolicy for ARM template files (not bicep files)
-    # since bicep files now use JSON objects directly
-    if not template_uri and template_file and not is_bicep_file(template_file):
+    if not template_uri:
         # Plug this as default HTTP pipeline
         # pylint: disable=protected-access
         from azure.core.pipeline import Pipeline

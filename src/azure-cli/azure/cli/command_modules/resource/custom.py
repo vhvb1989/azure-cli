@@ -1136,6 +1136,22 @@ def _load_template_spec_template(cmd, template_spec):
     return template_obj
 
 
+def _get_template_for_deployment(template_uri, template_spec, template_file, template_content, template_obj, parameters):
+    """Determine what to use for template deployment based on the source"""
+    if template_uri or template_spec:
+        # For URI and template spec deployments, use None (template_link will be used)
+        return None
+    elif _is_bicepparam_file_provided(parameters):
+        # For bicepparam files, use the content
+        return template_content
+    elif template_file and is_bicep_file(template_file):
+        # For bicep files, use JSON object to avoid size inflation
+        return template_obj
+    else:
+        # For ARM template files, use string content
+        return template_content
+
+
 def _process_template_file(cmd, template_file, deployment_scope):
     """Process template file and return template_content and template_obj"""
     if is_bicep_file(template_file):
@@ -1152,7 +1168,7 @@ def _process_template_file(cmd, template_file, deployment_scope):
         # For ARM template files, read content and process comments
         template_content = read_file_content(template_file)
         template_obj = _remove_comments_from_json(template_content, file_path=template_file)
-    
+
     return template_content, template_obj
 
 
@@ -1218,19 +1234,7 @@ def _prepare_deployment_properties_unmodified(cmd, deployment_scope, template_fi
         parameters = _get_missing_parameters(parameters, template_obj, _prompt_for_parameters, no_prompt)
         parameters = json.loads(json.dumps(parameters))
 
-    # Determine what to use for template deployment based on the source
-    if template_uri or template_spec:
-        # For URI and template spec deployments, use None (template_link will be used)
-        template_for_deployment = None
-    elif _is_bicepparam_file_provided(parameters):
-        # For bicepparam files, use the content
-        template_for_deployment = template_content
-    elif template_file and is_bicep_file(template_file):
-        # For bicep files, use JSON object to avoid size inflation
-        template_for_deployment = template_obj
-    else:
-        # For ARM template files, use string content
-        template_for_deployment = template_content
+    template_for_deployment = _get_template_for_deployment(template_uri, template_spec, template_file, template_content, template_obj, parameters)
 
     properties = DeploymentProperties(template=template_for_deployment, template_link=template_link,
                                       parameters=parameters, mode=mode, on_error_deployment=on_error_deployment,

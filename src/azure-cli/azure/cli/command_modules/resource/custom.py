@@ -1136,6 +1136,26 @@ def _load_template_spec_template(cmd, template_spec):
     return template_obj
 
 
+def _process_template_file(cmd, template_file, deployment_scope):
+    """Process template file and return template_content and template_obj"""
+    if is_bicep_file(template_file):
+        # Get compiled JSON from bicep
+        template_content = run_bicep_command(cmd.cli_ctx, ["build", "--stdout", template_file])
+        # For bicep files, parse JSON directly to avoid Azure SDK size inflation.
+        # Bicep compilation outputs clean JSON without comments, so it's safe to
+        # parse directly. This prevents the 4MB template size limit issue caused
+        # by Azure SDK string escaping when using template content as string.
+        template_obj = json.loads(template_content)
+        template_schema = template_obj.get('$schema', '')
+        validate_bicep_target_scope(template_schema, deployment_scope)
+    else:
+        # For ARM template files, read content and process comments
+        template_content = read_file_content(template_file)
+        template_obj = _remove_comments_from_json(template_content, file_path=template_file)
+    
+    return template_content, template_obj
+
+
 def _prepare_deployment_properties_unmodified(cmd, deployment_scope, template_file=None, template_uri=None, parameters=None,
                                               mode=None, rollback_on_error=None, no_prompt=False, template_spec=None, query_string=None,
                                               validation_level=None):
@@ -1182,20 +1202,7 @@ def _prepare_deployment_properties_unmodified(cmd, deployment_scope, template_fi
         template_schema = template_obj.get('$schema', '')
         validate_bicep_target_scope(template_schema, deployment_scope)
     else:
-        if is_bicep_file(template_file):
-            # Get compiled JSON from bicep
-            template_content = run_bicep_command(cmd.cli_ctx, ["build", "--stdout", template_file])
-            # For bicep files, parse JSON directly to avoid Azure SDK size inflation.
-            # Bicep compilation outputs clean JSON without comments, so it's safe to
-            # parse directly. This prevents the 4MB template size limit issue caused
-            # by Azure SDK string escaping when using template content as string.
-            template_obj = json.loads(template_content)
-            template_schema = template_obj.get('$schema', '')
-            validate_bicep_target_scope(template_schema, deployment_scope)
-        else:
-            # For ARM template files, read content and process comments
-            template_content = read_file_content(template_file)
-            template_obj = _remove_comments_from_json(template_content, file_path=template_file)
+        template_content, template_obj = _process_template_file(cmd, template_file, deployment_scope)
 
     if rollback_on_error == '':
         on_error_deployment = OnErrorDeployment(type='LastSuccessful')

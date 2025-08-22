@@ -387,6 +387,7 @@ def _deploy_arm_template_core_unmodified(cmd, resource_group_name, template_file
     if template_uri:
         template_link = TemplateLink(uri=template_uri)
         template_obj = _remove_comments_from_json(_urlretrieve(template_uri).decode('utf-8'), file_path=template_uri)
+        template_for_deployment = None  # Use template_link for URI-based deployments
     else:
         if is_bicep_file(template_file):
             # Get compiled JSON from bicep
@@ -1210,8 +1211,19 @@ def _prepare_deployment_properties_unmodified(cmd, deployment_scope, template_fi
         parameters = _get_missing_parameters(parameters, template_obj, _prompt_for_parameters, no_prompt)
         parameters = json.loads(json.dumps(parameters))
 
-    # Use JSON object for bicep files to avoid size inflation, string for ARM files
-    template_for_deployment = template_obj if (template_file and is_bicep_file(template_file)) else template_content
+    # Determine what to use for template deployment based on the source
+    if template_uri or template_spec:
+        # For URI and template spec deployments, use None (template_link will be used)
+        template_for_deployment = None
+    elif _is_bicepparam_file_provided(parameters):
+        # For bicepparam files, use the content
+        template_for_deployment = template_content
+    elif template_file and is_bicep_file(template_file):
+        # For bicep files, use JSON object to avoid size inflation
+        template_for_deployment = template_obj
+    else:
+        # For ARM template files, use string content
+        template_for_deployment = template_content
 
     properties = DeploymentProperties(template=template_for_deployment, template_link=template_link,
                                       parameters=parameters, mode=mode, on_error_deployment=on_error_deployment,

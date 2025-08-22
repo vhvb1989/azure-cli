@@ -1141,15 +1141,15 @@ def _get_template_for_deployment(template_uri, template_spec, template_file, tem
     if template_uri or template_spec:
         # For URI and template spec deployments, use None (template_link will be used)
         return None
-    
+
     if _is_bicepparam_file_provided(parameters):
         # For bicepparam files, use the content
         return template_content
-    
+
     if template_file and is_bicep_file(template_file):
         # For bicep files, use JSON object to avoid size inflation
         return template_obj
-    
+
     # For ARM template files, use string content
     return template_content
 

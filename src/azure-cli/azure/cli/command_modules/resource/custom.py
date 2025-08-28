@@ -1131,8 +1131,10 @@ def _get_template_for_deployment(template_uri, template_spec, template_file, tem
         return template_content
 
     if template_file and is_bicep_file(template_file):
-        # For bicep files, use JSON object to avoid size inflation
-        return template_obj
+        # For bicep files, convert the parsed object back to compact JSON string
+        # This avoids the size inflation issue while maintaining compatibility
+        # with the Azure SDK which expects string content
+        return json.dumps(template_obj, separators=(',', ':'))
 
     # For ARM template files, use string content
     return template_content

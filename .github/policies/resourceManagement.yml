@@ -234,6 +234,9 @@ configuration:
             - mbifeld
             - FumingZhang
             - andyliuliming
+            - palma21
+            - yizhang4321
+            - qike-ms
             replyTemplate: Thanks for the feedback! We are routing this to the appropriate team for follow-up. cc ${mentionees}.
             assignMentionees: False
       - if:
@@ -1202,10 +1205,12 @@ configuration:
         then:
         - mentionUsers:
             mentionees:
+            - mbifeld
+            - FumingZhang
+            - andyliuliming
+            - palma21
+            - yizhang4321
             - qike-ms
-            - jwilder
-            - thomas1206
-            - seanmck
             replyTemplate: Thanks for the feedback! We are routing this to the appropriate team for follow-up. cc ${mentionees}.
             assignMentionees: False
       - if:
